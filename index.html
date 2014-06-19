@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+   <title>Rescue Time Interactive Calendar</title>
+    <meta charset="UTF-8">
+
+    <script src="http://d3js.org/d3.v3.min.js"></script>
+    <script src="../crossfilter.v1.min.js"></script>
+    <script src="http://code.jquery.com/jquery.js"></script>
+    <script src="../bootstrap.min.js"></script>
+    <link href="../bootstrap.min.css" rel="stylesheet" media="screen"/>
+</head>
+<style>
+
+h1 {
+  font-size: 16px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+  margin-left: 10px;
+}
+
+.overlay {
+  fill: none;
+  pointer-events: all;
+}
+
+svg_hour{
+  font: 10px sans-serif;
+}
+
+circle {
+  -webkit-transition: fill-opacity 250ms linear;
+}
+
+.selecting circle {
+  fill-opacity: .2;
+}
+
+.selecting circle.selected {
+  stroke: #f00;
+}
+
+.resize path {
+  fill: dodgerblue;
+  fill-opacity: 0.7;
+  stroke: #000;
+  stroke-width: 1.5px;
+}
+
+.axis path, .axis line {
+  fill: lightskyblue;
+  opacity: 0.1
+  stroke: #000;
+  shape-rendering: crispEdges;
+  stroke-width: 1.5px;
+}
+
+.brush .extent {
+   fill:lightcyan;
+  fill-opacity: .5;
+  shape-rendering: crispEdges;
+}
+
+</style>
+<body>
+
+  <div class="row" >
+    <div class="span3" id="category" ></div> 
+    <div class="span2" id="ranking" ></div> 
+    <div class="span10" id="calendar" ></div>  
+    <div class="span4" >
+      
+      <p id="menuType"><br> Select Chart Type Here: <select></select>
+      <p id="menuMonth"><br> Select Month Here: <select></select>
+      
+      <div class="row"> 
+      <div class="span4" id="chart_hour" ></div>
+      </div> 
+      
+      <div class="row"> 
+      <div class="span4" id="chart_volume" ></div>
+      </div>
+      
+    </div> 
+  </div>
+<script>
+
+d3.csv("../Data/rescuetime data.csv", function(rescueData) 
+{  
+
+  //parse the time variable 
+    var parseDate=d3.time.format("%Y-%m-%dT%H:%M:%S"),
+        monthFormat=d3.time.format("%B");
+        dataset=[], // array of object for storing cleaned data
+        total = 0;  // Dummy variable to sum the hourly time from various app
+    
+    // parse time 
+    rescueData.forEach(function(d){
+        d.Date=parseDate.parse(d.Date);
+        d.Time_Spent=parseInt(d.Time_Spent);
+    })
+
+  
+    // intial drawing data
+    volumeCaculator_1(rescueData);
+
+    // Now, dataset is created, let's sort it for parsing data
+    sortTime(dataset);
+
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
+  ///////////////////////////////////Declare Vairables/////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
+  // crossfilter variable 
+  var rescueD = crossfilter(rescueData),
+      month   = rescueD.dimension(function(d) { return d.Date.getMonth(); }),
+      hour    = rescueD.dimension(function(d) { return d.Date.getHours(); }),
+      rescueC = crossfilter(dataset),
+      volume  = rescueC.dimension(function(d) { return d.VolumeTime/60 ; }),
+      month_selected =0,
+      update  = month.filter(month_selected).top(Infinity), // dataset is data for drawing full calendar, initially we set update as max data availiable
+      updateBrush = [];
+     
+
+  // public variable for update and drawing the pie chart
+  var updateAll=[],
+      updateCategory=[],
+      updateActivity=[],
+      // dataset for drawing ranking chart
+      categoryData=[], 
+      activityData=[];
+
+     
+
+  //////////////////////////////////////////////////////////////////////////////////////////////////
+  ///////////////////////////Parsing & Sorting Function ////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////
+  
+  function sortTime(data1){
+        // sort data in time order 
+      data1.sort( function (a,b) {
+                var date1 = a.Date;
+                var date2 = b.Date;
+                return date1 - date2; //sort by date ascending
+    })
+  }
+
+  ////////////////////////////////////
+  ///////sort category_data in decending order of total time spent in each category
+  ////////////////////////////////////// 
+  function sortTimeTotal(Data){
+      
+      Data.sort(function(a,b) {
+
+      return b.total_time-a.total_time
+    });
+  }
+
+  ////////////////////////////////////
+  ///////sort out category data
+  ////////////////////////////////////// 
+  function sortCategory(Data){
+
+    Data.sort(function(a, b){
+      var nameA=a.Category.toLowerCase(), nameB=b.Category.toLowerCase()
+      if (nameA < nameB) //sort string ascending
+        return -1 
+      if (nameA > nameB)
+        return 1
+      return 0 //default return value (no sorting)
+    })
+  }  
+
+  ////////////////////////////////////
+  ///////sort out activity data
+  ////////////////////////////////////// 
+  function sortActivity(Data){
+
+    Data.sort(function(a, b){
+      var nameA=a.Activity.toLowerCase(), nameB=b.Activity.toLowerCase()
+      if (nameA < nameB) //sort string ascending
+        return -1 
+      if (nameA > nameB)
+        return 1
+      return 0 //default return value (no sorting)
+    })
+  } 
+  ///////////////////////////////////
+  //////Volume Calculator for complete dataset 
+  ///////////////////////////////////
+  function volumeCaculator_1(Data){
+
+    var timeSum=0;
+    var newData=[];
+    updateAll=[];
+    //always sort data in time before
+    sortTime(Data);
+    
+    Data.forEach( function(d,i){ 
+      if ( (i+1) != Data.length && d.Date.getHours() == Data[i+1].Date.getHours() ) {
+ 
+        timeSum = timeSum + d.Time_Spent;
+      }
+      else {
+            var object =
+            {   
+              Date: d.Date,
+              VolumeTime: timeSum + d.Time_Spent 
+            };     
+         newData.push(object);
+        timeSum = 0;           
+      }
+    });
+     updateAll=newData;
+  }
+
+  ////////////////////////////////////
+  ///////Volume Calculator for data that draws each category 
+  ////////////////////////////////////
+  function volumeCaculator_2(Data){
+
+    var timeSum=0;
+    var newData=[];
+    
+    //always sort data in time before
+    sortTime(Data);
+    
+    Data.forEach( function(d,i){ 
+      if ( (i+1) != Data.length && d.Date.getHours() == Data[i+1].Date.getHours() ) {
+ 
+        timeSum = timeSum + d.Time_Spent;
+      }
+      else {
+            var object1 =
+            {   
+              Date: d.Date,
+              VolumeTime: timeSum + d.Time_Spent
+            };     
+         newData.push(object1);
+        timeSum = 0;           
+      }
+    });
+
+    var object2=
+    {
+      name: Data[0].Category,
+      data: newData,
+      total_time: 0
+    }
+     updateCategory.push(object2);
+  }
+
+  ////////////////////////////////////
+  ///////Volume Calculator for data that draws each activity
+  ////////////////////////////////////
+  function volumeCaculator_3(Data){
+
+    var timeSum=0;
+    var newData=[];
+  
+    //always sort data in time before
+    sortTime(Data);
+    
+    Data.forEach( function(d,i){ 
+      if ( (i+1) != Data.length && d.Date.getHours() == Data[i+1].Date.getHours() ) {
+ 
+        timeSum = timeSum + d.Time_Spent;
+      }
+      else {
+            var object1 =
+            {   
+              Date: d.Date,
+              VolumeTime: timeSum + d.Time_Spent 
+            };     
+         newData.push(object1);
+        timeSum = 0;           
+      }
+    });
+
+    var object2=
+    {
+      name: Data[0].Activity,
+      data: newData,
+      total_time: 0
+    }
+     updateActivity.push(object2);
+  }
+
+
+  ////////////////////////////////////
+  ///// Category Ranking Array 
+  ////////////////////////////////////// 
+  // create all type of data for category: chart, name , ranking
+  function rankCategory(Data){
+
+    var dataArray=[],
+        timeCount=0; 
+        categoryData=[]; 
+
+    Data.forEach( function (d,i) {
+
+      if( (i+1) != Data.length && d.Category == Data[i+1].Category ){   
+        
+        dataArray.push(d);
+        timeCount = timeCount + d.Time_Spent;
+      }
+      else{
+
+        dataArray.push(d);
+        var object = { 
+            name: d.Category,                 // name of category
+            total_time: timeCount + d.Time_Spent, // total time spent in this category
+            data: dataArray                    // all data of this category
+          }
+
+      categoryData.push(object);
+      dataArray=[]; // clean up set for reuse
+      timeCount=0;
+      }
+    })
+  }
+  
+  ////////////////////////////////////
+  ///// Activity Ranking Array 
+  ////////////////////////////////////// 
+  function rankActivity(Data){
+
+    var dataArray=[],
+        timeCount=0;
+        activityData=[];
+
+    // sort in acitivty order always before parsing
+    sortActivity(Data);
+
+    Data.forEach( function (d,i) {
+
+      if( (i+1) != Data.length && d.Activity == Data[i+1].Activity){   
+
+        dataArray.push(d);
+        timeCount = timeCount + d.Time_Spent;
+      }
+      else{
+
+        dataArray.push(d);
+        var object = { 
+            name: d.Activity,                     // name of category
+            total_time: timeCount + d.Time_Spent, // total time spent in this category
+            data: dataArray                       // all data of this category
+          }
+
+        // create sorted activity array
+        activityData.push(object);
+        // reset variables
+        dataArray=[];
+        timeCount=0;
+      }
+
+    })
+  }
+
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  ///Prasing Function/////////////////////////////////////////////////////////////////////////////////////////
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // the function return, data2 is the data of selected month or year/////////////////////////////////////////
+  // 1. updateCategory - data for drawing category chart//////////////////////////////////////////////////////
+  // 2. updateRank - data for drawing ranking chart, wrt to each category ////////////////////////////////////
+  
+  function find_category(data2){
+  
+    categoryData=[];
+    updateAll=[];        
+    updateCategory=[];
+
+    //step 1: upateAll
+    volumeCaculator_1(data2);
+   
+    //step 2, updateCatgory 
+    // sort out the category
+    sortCategory(data2);
+    // calculate volume of each category in each day
+    // create all type of data for category: chart, name , ranking
+    rankCategory(data2);
+    // parse for category chart
+    volumeCaculator_1(data2);
+    //sort in categorical order
+    sortTimeTotal(data2);
+    // parse for rank chart
+
+    ////////////////////////////////////////////////////////////////////
+    //Create updateCategory & updateActivity////////////////////////////
+    ////////////////////////////////////////////////////////////////////
+    var temp=0; // to 
+  
+    categoryData.forEach(function(a,i){ 
+      //calculate total time for all categorty wrt present data
+      temp=temp+a.total_time; 
+
+      var x=crossfilter(categoryData)
+          .dimension(function(b){ return b.name;})
+          .filter(a.name)
+          .top(Infinity);
+
+      var eachCategory=x[0].data;
+
+      ////////////////////////////////////////////////////////////////////////////////////
+      // Create data array for UpdateCategory to drawing ranking and rescue vis
+      ////////////////////////////////////////////////////////////////////////////////////
+      volumeCaculator_2(eachCategory); 
+      updateCategory[i].total_time=a.total_time;
+    })
+    // calculate total time for 
+
+    updateCategory.push(
+    {
+      name: "Complete Data",
+      total_time: temp,
+      data: updateAll
+    });
+
+    // rank cateogry in decesding total time order
+    sortTimeTotal(categoryData);
+    sortTimeTotal(updateCategory);
+  }
+    
+
+      find_category(rescueData);
+
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////// Create Month Button for Update ///////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  var TypeData = ["Choose Month","Pie", "Bar"],
+      chartType="Pie",
+  monthName = ["Choose Month", "Full Year","January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  
+  var menuChart = d3.select("#menuType select")
+      .on("change", changeChart);
+  
+  var menuMonth = d3.select("#menuMonth select")
+      .on("change", changeMonth);
+
+  menuChart.selectAll("option")
+        .data(TypeData)
+        .enter().append("option")
+        .text(function(d) { return d; });
+
+  menuMonth.selectAll("option")
+        .data(monthName)
+        .enter().append("option")
+        .text(function(d) { return d; });
+
+ 
+  function changeChart(){ 
+    if(menuChart.property("value")=="Pie"){
+      chartType="Pie";
+    }
+    else{ 
+      chartType="Bar"
+    }
+  }
+
+  function changeMonth(){ 
+
+    if(menuMonth.property("value")=="Full Year"){  
+      month_selected=12;
+      update=rescueData; 
+      }
+    else{
+      month_selected=monthFormat.parse(menuMonth.property("value")).getMonth();
+      update=month.filter(month_selected).top(Infinity); 
+      }
+      
+      // new data feed
+      find_category(update);
+      DrawCalendar(month_selected,updateAll);
+      background(month_selected);
+      draw_category_chart();
+      updateBrush=updateAll;
+      rescueD = crossfilter(updateAll); 
+  } 
+
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////DRAWING/////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // declare drawing boundary 
+  var margin = {top: 50, right: 5, bottom: 10, left: 5},
+      width =  770 ,
+      height = 1300 ,
+      r_year = (width-margin.right-margin.left)/33/2,
+      r_month= (width-margin.right-margin.left)/9/2;
+
+  // scales                           
+  var timeScale = d3.scale.linear().domain([0, 24]).range([0, 2 * Math.PI]),
+      xScale = d3.time.scale().domain( [0,31]).range ( [margin.left+r_year, width-r_year-margin.right]),     
+      yScale = d3.time.scale().domain([0,18]).range( [margin.top+r_year, r_year*2*23]),
+      xScale_month = d3.time.scale().domain([0,6]).range ( [margin.left+r_month, width-r_month-margin.right]),    
+      yScale_month = d3.time.scale().domain([0,4]).range( [margin.top+r_month, r_month*2*7]),
+      volumeScale = d3.scale.linear().domain([0, 3600]).range( [0, r_year] ),
+      volumeScale_month= d3.scale.linear().domain([0, 3600]).range( [0, r_month] ),
+      x_hour = d3.scale.linear().domain([0, 24]).rangeRound([0, 250]),
+      x_volume = d3.scale.linear().domain([0, 60]).rangeRound([0, 250]),
+      barWScale_month = d3.scale.linear().domain([0,24]).rangeRound ( [0, xScale_month(0.9)-xScale_month(0)] ),
+      barHScale_month = d3.scale.linear().domain([0,3600]).rangeRound ( [0,2*r_month] ),
+      yScaleBar_month = d3.time.scale().domain([0,4]).range( [margin.top+r_month, r_month*2*5]),
+      barWScale_year = d3.scale.linear().domain([0,24]).rangeRound ( [0, xScale(0.9)-xScale(0)] ),
+      barHScale_year = d3.scale.linear().domain([0,3600]).rangeRound ( [0,2*r_year] ),
+      yScaleBar_year = d3.time.scale().domain([0,4]).range( [margin.top+r_year, r_year*2*5]);
+      
+  var paint= d3.select("#calendar").append("svg")
+      .attr("width", width )
+      .attr("height", height);
+
+  ///////////////////////////////////Pie Chart /////////////////////////////////
+  //Define key function, to be used when binding data
+  var key = function(d) 
+  {
+    return d.Date;
+  };    
+  
+  // start drawing 
+  var arc = d3.svg.arc()
+    .startAngle(function(d){return timeScale(d.Date.getHours());})
+    .endAngle(function(d){return timeScale(d.Date.getHours()+1);});
+
+  function DrawCalendar(month_selected,data3){
+
+     if(chartType=="Pie"){
+      DrawPie(month_selected,data3);
+     }
+     else{
+      DrawBar(month_selected,data3);
+     }
+  }
+
+  function DrawBar(month_selected,data3){
+
+    paint.selectAll("path").remove();
+    var parseDay=d3.time.format("%Y-%m-%d");
+    var first_day=parseDay.parse(data3[0].Date.getFullYear()+"-"+(parseInt(data3[0].Date.getMonth())+1)+"-01").getDay();
+    var bar =paint.selectAll("rect").data(data3, key); 
+    bar.exit().remove();
+    bar.enter().append("rect"); 
+
+    var axisLine= paint.selectAll("line.bar").data(data3);
+        axisLine.exit().remove();
+        axisLine.enter().append("line");
+
+    if(month_selected==12){
+
+       bar.attr("x", function(d){ return  barWScale_year( d.Date.getHours()) + xScale( -1+((first_day+6)%7 +d.Date.getDate() -1)%7 + ( d.Date.getMonth()%4 )*8 )-xScale(0)  ;})
+            .attr("y", function(d){ 
+
+                return   (2*r_year-barHScale_year(d.VolumeTime))-r_year+
+                  yScale( Math.floor(( (first_day+6)%7 +d.Date.getDate() -1) /7 ) +
+                  Math.floor( d.Date.getMonth()/4 )*7 ) ;     })             
+
+       .attr("width",r_year/14)
+       .attr("height", function(d){ return barHScale_year(d.VolumeTime); } )
+       .attr("fill", "darkslateblue")
+       .attr("fill-opacity",0.5);
+
+        axisLine
+      .attr("class","bar")
+      .attr("x1", function(d) { return xScale( ((first_day+6)%7 +d.Date.getDate() -1)%7+ ( d.Date.getMonth()%4 )*8  )-xScale(0) ;})
+           .attr("y1", function(d,i){ return  r_year+yScale( Math.floor(( (first_day+6)%7 +d.Date.getDate() -1) /7 ) +
+                  Math.floor( d.Date.getMonth()/4 )*7 ) ;     })    
+
+           .attr("x2", function(d) { return xScale( ((first_day+6)%7 +d.Date.getDate() -1)%7+ ( d.Date.getMonth()%4 )*8  )-xScale(0) + barWScale_year(24);})
+          .attr("y1", function(d,i){ return  r_year+yScale( Math.floor(( (first_day+6)%7 +d.Date.getDate() -1) /7 ) +
+                  Math.floor( d.Date.getMonth()/4 )*7 ) ;     })  
+           .style("stroke", "black")
+           .style("opacity",1)
+           .style("stroke-width", 1);
+
+      }
+      else{
+   
+      // define radius
+      bar.attr("x", function(d){ return  barWScale_month( d.Date.getHours() ) + xScale_month( ((first_day+6)%7 +d.Date.getDate() -1)%7 )-xScale_month(0) ;})
+       .attr("y", function(d){ return  (2*r_month-barHScale_month(d.VolumeTime))-r_month+yScale_month( Math.floor((( first_day+6)%7 +d.Date.getDate() -1)/7));   })
+       .attr("width",r_month/14)
+       .attr("height", function(d){ return barHScale_month(d.VolumeTime); } )
+       .attr("fill", "darkslateblue")
+       .attr("fill-opacity",0.5);
+
+      
+   
+      axisLine
+      .attr("class","bar")
+      .attr("x1", function(d) { return xScale_month( ((first_day+6)%7 +d.Date.getDate() -1)%7 )-xScale_month(0) ;})
+           .attr("y1", function(d,i){ return  r_month+yScale_month( Math.floor((( first_day+6)%7 +d.Date.getDate() -1)/7));    })
+           .attr("x2", function(d) { return xScale_month( ((first_day+6)%7 +d.Date.getDate() -1)%7 )-xScale_month(0) + barWScale_month(24);})
+           .attr("y2", function(d,i){ return r_month+yScale_month( Math.floor((( first_day+6)%7 +d.Date.getDate() -1)/7)); })
+           .style("stroke", "darkslateblue")
+           .style("opacity",1)
+           .style("stroke-width", 1);
+      }
+  }
+
+  function DrawPie(month_selected,data3){
+
+    paint.selectAll("rect").remove();
+    paint.selectAll("line.bar").remove();
+    var parseDay=d3.time.format("%Y-%m-%d");
+    var first_day=parseDay.parse(data3[0].Date.getFullYear()+"-"+(parseInt(data3[0].Date.getMonth())+1)+"-01").getDay();
+    var pie =paint.selectAll("path").data(data3, key); 
+        pie.exit().remove();
+        pie.enter().append("path");
+  
+    if(month_selected==12){
+
+      // define radius
+      arc.innerRadius(function(d) { return r_year - volumeScale(d.VolumeTime) ;  })
+          .outerRadius(r_year);  
+    
+      // yearly pie
+      pie.attr("d", arc)
+          .attr("class", "arc")
+          .style("fill", "darkslateblue")
+          .attr("fill-opacity",0.5)
+          .attr("transform", 
+              function(d) {
+                
+                return "translate(" + 
+                  xScale( ((first_day+6)%7 +d.Date.getDate() -1)%7 + ( d.Date.getMonth()%4 )*8 )  +"," + 
+                  yScale( Math.floor(((first_day+6)%7 +d.Date.getDate() -1)/7)                    +
+                         Math.floor( d.Date.getMonth()/4 )*7 )                                                + ")"; 
+              });
+    }
+    else{
+        // define radius
+        arc.innerRadius(function(d) { return r_month - volumeScale_month(d.VolumeTime) ;  })
+           .outerRadius(r_month);
+   
+        // monthly pie     
+        pie.attr("d", arc)
+          .attr("class", "arc")
+          .style("fill", "darkslateblue")
+          .attr("fill-opacity",0.8)
+          .attr("transform", 
+              function(d,i) { 
+
+                  return  "translate(" + 
+                    xScale_month( ((first_day+6)%7 +d.Date.getDate() -1)%7 )             +","+
+                    yScale_month( Math.floor((( first_day+6)%7 +d.Date.getDate() -1)/7))  +")"; 
+              
+            }); 
+    }
+  }
+  
+  
+  /////////////////////////////////////////////////////////////////////////////////////////
+  // Background of Calendar ///////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////
+
+  var days=[ "Mon", "Tue", "Wed", "Thu", "Fri", "Sat","Sun" ];
+  var monthName = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+  function background(month_selected){
+
+  if(month_selected>11){
+
+    var lines= paint.selectAll("line").data([]);
+    lines.exit().remove();
+    lines.enter().append("line");
+
+    var text=paint.selectAll("text").data(monthName);
+    text.exit().remove();
+    text.enter().append("text");
+    text.attr("x", function (d,i) { return xScale(( i%4 )*8 ) - r_year; })
+          .attr("y", function (d,i) { return yScale( Math.floor( i/4 )*7 ) -30; })
+          .text(function(d){return d} )
+          .attr("font-size",14)
+          .style("fill", "black")
+          .style("opacity", 0.8)
+          .attr("font-weight","bold") ;
+
+
+  }
+  else{
+
+        // draw line
+    var lines= paint.selectAll("line.title").data([1]);
+    lines.exit().remove();
+    lines.enter().append("line");
+    lines.attr("class","title")
+        .attr("x1", xScale_month(0)-r_month)
+           .attr("y1", yScale(0)-20)
+           .attr("x2", xScale_month(6)+r_month)
+           .attr("y2", yScale(0)-20)
+           .style("stroke", "grey")
+           .style("opacity",0.6)
+           .style("stroke-width", 1.5);
+    //BarBackground();
+
+    // print name of day
+   var text=paint.selectAll("text").data(days);
+    text.exit().remove();
+    text.enter().append("text");
+    text.attr("x", function (d,i) { return xScale_month(i)-10;})
+          .attr("y", yScale(0)-25)
+          .text(function(d){return d} )
+          .style("fill", "black")
+          .style("opacity",0.8)
+          .attr("font-size",16)
+          .attr("font-family","black")
+          .attr("font-weight","bold") ;  
+
+   
+    }
+  }
+
+  
+  
+ 
+
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////DRAW CATEGORY CHART/////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  var categoriesTimeScale = d3.scale.linear().domain([0, categoryData[0].total_time]).range([0, 200]);        
+
+  var chart_1=d3.select("#category").append("svg")
+      .attr("width", 200)
+      .attr("height", height);
+
+  var rank_chart=d3.select("#ranking").append("svg")
+        .attr("width",160)
+        .attr("height",height);
+
+  function draw_category_chart(){
+    
+    var chart_category = chart_1.selectAll("rect.category").data(updateCategory);
+    chart_category.exit().remove();
+    chart_category.enter().append("rect");
+    chart_category.attr("class","category")
+        .attr("x",5)
+        .attr("y", function (d,i) { return 10+i* 25;} )
+        .attr("width", function (d,i) { 
+              if(d.name=="Complete Data") { return 300;         }
+              else { return categoriesTimeScale(d.total_time)  ;}})
+        .attr("height",20)
+        .attr("fill", "skyblue")
+        .attr("opacity",1)
+        .on("click", function (d,i) { return change_category(i,d.name,d.data); } );
+
+    var text_category = chart_1.selectAll("text.category").data(updateCategory);
+    text_category.exit().remove();
+    text_category.enter().append("text"); 
+    text_category
+        .attr("class","category")
+        .text( function(d) { return d.name; })
+        .attr("x",5)
+        .attr("y", function (d,i) { return 10+i* 25+10;} )
+        .attr("font-size",12)
+        .attr("text-anchor", "right")
+          .style("fill", "black")
+          .style("opacity", 1)
+          .on("click", function (d,i) { return change_category(i,d.name,d.data); } );
+
+    //draw ranking of activity at initial stage
+    // create activityData for updateActivity 
+      rankActivity(update);
+       // activityData for draw activity in pie calendar
+      updateActivity=[];
+      // obtain specific activity data
+      activityData.forEach(function(c,j){
+
+        volumeCaculator_3(c.data);
+        updateActivity[j].total_time=c.total_time;
+      })
+      // data for drawing ranking chart
+      sortTimeTotal(activityData);
+      sortTimeTotal(updateActivity);
+
+      drawRank(activityData,updateActivity);
+
+    // update change function for category ranking chart
+    var dummy_color=-1;
+    
+    function change_category(n,category,data4){
+
+      chart_category
+        .attr("fill", function(d,i){ if(i==n){ return "orange"; } else if( i==dummy_color) { return "skyblue";} else{ return "skyblue"} });
+      dummy_color=n;
+
+        DrawCalendar(month_selected,data4);
+        updateBrush=data4;
+        rescueD = crossfilter(data4);
+      
+      //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////DRAW RANKING CHART//////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      
+      ////////////////////////////
+      // create activityData array
+      ////////////////////////////
+      
+      if(category=="Complete Data") {
+        
+        allActivity=update;
+      }
+      else{
+
+       var allActivity=crossfilter(update)
+          .dimension(function(b){ return b.Category; })
+          .filter(category)
+          .top(Infinity);
+      }
+      // create activityData for updateActivity 
+      rankActivity(allActivity);
+      // activityData for draw activity in pie calendar
+      updateActivity=[];
+      // obtain specific activity data
+      activityData.forEach(function(c,j){
+
+        volumeCaculator_3(c.data);
+        updateActivity[j].total_time=c.total_time;
+      })
+      // data for drawing ranking chart
+      sortTimeTotal(activityData);
+      sortTimeTotal(updateActivity);
+      
+      ///////////////////////////////////////////
+      //draw activity chart ranking and pie
+      ///////////////////////////////////////////
+      drawRank(activityData,updateActivity);
+    }
+  }
+  
+  function drawRank(RankData,PieData){
+
+    var rankTimeScale = d3.scale.linear().domain([0, RankData[0].total_time ]).range([0, 140]);
+
+      var ranks = rank_chart.selectAll("rect.rank").data(RankData);
+      ranks.exit().remove();
+      ranks.enter().append("rect");
+      ranks.attr("class","rank")
+        .attr("x",0)
+        .attr("y", function (d,i) { return 10+i* 25;} )
+        .attr("width", function (d) { return rankTimeScale(d.total_time); })
+        .attr("height",20)
+        .attr("fill", "skyblue")
+        .attr("opacity",0.5)
+        .on("click", function (d,i) { return changeRank(i); } );  
+  
+      var rank_text = rank_chart.selectAll("text.rank").data(RankData);
+      rank_text.exit().remove();
+      rank_text.enter().append("text");
+      rank_text
+        .attr("class","rank")
+        .text( function(d) { return d.name; })
+        .attr("x",0)
+        .attr("y", function (d,i) { return 10+i* 25+10;} )
+        .attr("font-size",12)
+        .attr("text-anchor", "right")
+          .style("fill", "black")
+          .style("opacity", 1)
+          .on("click", function (d,i) { return changeRank(i); } );
+
+      var dummy_color_2=0;  
+      function changeRank(n)
+      {
+
+           ranks
+          .attr("fill", function(d,i){ if(i==n){ return "orange"; } else if( i==dummy_color_2) { return "skyblue";} else{ return "skyblue"} });
+            dummy_color_2=n;
+
+
+           var tempData=PieData[n].data;
+           DrawCalendar(month_selected,tempData);
+           updateBrush=tempData;
+           rescueD = crossfilter(tempData);
+      }    
+
+  }
+
+// intial drawing: jan
+      find_category(month.filter(0).top(Infinity) );
+      updateBrush=updateAll;
+      DrawCalendar(0,updateAll);
+      background(0);
+      draw_category_chart();
+
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////DRAW BRUSHING CHART/////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+  // declare brushing chart
+  var brush_hour = d3.svg.brush()
+      .x(x_hour)
+      .extent([0, 24])
+      .on("brushstart", brushstart_hour)
+      .on("brush", brushmove_hour)
+      .on("brushend", brushend_hour);
+
+  var brush_volume = d3.svg.brush()
+      .x(x_volume)
+      .extent([0, 60])
+      .on("brushstart", brushstart_volume)
+      .on("brush", brushmove_volume)
+      .on("brushend", brushend_volume);
+    
+  var a_hour= d3.svg.arc()
+      .outerRadius(10)
+      .startAngle(0)
+      .endAngle(function(d, i) { return i ? -Math.PI : Math.PI; });
+
+  var a_volume= d3.svg.arc()
+      .outerRadius(10)
+      .startAngle(0)
+      .endAngle(function(d, i) { return i ? -Math.PI : Math.PI; });
+    
+  var svg_hour = d3.select("#chart_hour").append("svg")
+      .attr("width", 280)
+      .attr("height", 40)
+      .append("g")
+      .attr("transform", "translate(" + 15 + "," + 5 + ")");
+
+  var svg_volume = d3.select("#chart_volume").append("svg")
+      .attr("width", 280)
+      .attr("height", 40)
+      .append("g")
+      .attr("transform", "translate(" + 15 + "," + 5 + ")");
+    
+  svg_hour.append("g")
+      .attr("class", "x axis")
+      .attr("transform", "translate(0," + 10 + ")")
+      .call(d3.svg.axis().scale(x_hour).orient("bottom"));
+    
+    svg_volume.append("g")
+      .attr("class", "x axis")
+      .attr("transform", "translate(0," + 10 + ")")
+      .call(d3.svg.axis().scale(x_volume).orient("bottom"));
+  
+  //////////////// Brushing Functions ///////////////////////////////
+  var brushg_hour = svg_hour.append("g")
+    .attr("class", "brush")
+    .call(brush_hour);
+    
+    var brushg_volume = svg_volume.append("g")
+    .attr("class", "brush")
+    .call(brush_volume);
+
+  brushg_hour.selectAll(".resize").append("path")
+    .attr("transform", "translate(0," +  10 + ")")
+    .attr("d", a_hour);
+    
+    brushg_volume.selectAll(".resize").append("path")
+    .attr("transform", "translate(0," +  10 + ")")
+    .attr("d", a_volume);
+
+  brushg_hour.selectAll("rect")
+    .attr("height", 20);
+    
+  brushg_volume.selectAll("rect")
+    .attr("height", 20);
+
+
+  brushstart_hour();
+  brushmove_hour();
+  
+  brushstart_volume();
+  brushmove_volume();
+
+  function brushstart_hour() {  
+    svg_hour.classed("selecting", true);
+  }
+  
+  function brushstart_volume() {  
+    svg_volume.classed("selecting", true);
+  }
+
+  function brushmove_hour() {
+      var s = brush_hour.extent();
+      rescueD=crossfilter(updateBrush);
+      hour = rescueD.dimension(function(d) { return d.Date.getHours(); });
+      var updateHour=hour.filterRange( [ Math.floor(s[0]), Math.floor(s[1])+1 ]).top(Infinity); 
+      DrawCalendar(month_selected,updateHour);
+    }
+
+  function brushmove_volume() {
+    
+      var v = brush_volume.extent();
+      rescueD=crossfilter(updateBrush);
+      volume = rescueD.dimension(function(d) { return d.VolumeTime/60 ; });
+      var updateVolume=volume.filterRange( [ Math.floor(v[0]), Math.floor(v[1])+1 ]).top(Infinity); 
+      DrawCalendar(month_selected,updateVolume);
+    }
+  
+  function brushend_hour() {
+      svg_hour.classed("selecting", !d3.event.target.empty());
+  }
+
+  function brushend_volume() {
+      svg_volume.classed("selecting", !d3.event.target.empty());
+  }
+  
+  d3.select("body").style("background-color", "snow");
+
+});
+</script>
